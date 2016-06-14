@@ -96,6 +96,7 @@
 @property (nonatomic, retain) IBOutlet UIView* overlayView;
 // unsafe_unretained is equivalent to assign - used to prevent retain cycles in the property below
 @property (nonatomic, unsafe_unretained) id orientationDelegate;
+@property (nonatomic)         BOOL              didAppear;
 
 - (id)initWithProcessor:(CDVbcsProcessor*)processor alternateOverlay:(NSString *)alternateXib;
 - (void)startCapturing;
@@ -283,8 +284,10 @@ parentViewController:(UIViewController*)parentViewController
 
 //--------------------------------------------------------------------------
 - (void)barcodeScanSucceeded:(NSString*)text format:(NSString*)format {
-    [self barcodeScanDone];
-    [self.plugin returnSuccess:text format:format cancelled:FALSE flipped:FALSE callback:self.callback];
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        [self barcodeScanDone];
+        [self.plugin returnSuccess:text format:format cancelled:FALSE flipped:FALSE callback:self.callback];
+    });
 }
 
 //--------------------------------------------------------------------------
@@ -348,13 +351,15 @@ parentViewController:(UIViewController*)parentViewController
     output.alwaysDiscardsLateVideoFrames = YES;
     output.videoSettings = videoOutputSettings;
     
-    [output setSampleBufferDelegate:self queue:dispatch_get_main_queue()];
-    
-    if (![captureSession canSetSessionPreset:AVCaptureSessionPresetMedium]) {
-        return @"unable to preset medium quality video capture";
+    [output setSampleBufferDelegate:self queue:dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0)];
+  
+    if ([captureSession canSetSessionPreset:AVCaptureSessionPresetHigh]) {
+      captureSession.sessionPreset = AVCaptureSessionPresetHigh;
+    } else if ([captureSession canSetSessionPreset:AVCaptureSessionPresetMedium]) {
+      captureSession.sessionPreset = AVCaptureSessionPresetMedium;
+    } else {
+      return @"unable to preset high nor medium quality video capture";
     }
-    
-    captureSession.sessionPreset = AVCaptureSessionPresetMedium;
     
     if ([captureSession canAddInput:input]) {
         [captureSession addInput:input];
@@ -633,6 +638,7 @@ parentViewController:(UIViewController*)parentViewController
 @synthesize shutterPressed = _shutterPressed;
 @synthesize alternateXib   = _alternateXib;
 @synthesize overlayView    = _overlayView;
+@synthesize didAppear      = _didAppear;
 
 //--------------------------------------------------------------------------
 - (id)initWithProcessor:(CDVbcsProcessor*)processor alternateOverlay:(NSString *)alternateXib {
@@ -643,6 +649,7 @@ parentViewController:(UIViewController*)parentViewController
     self.shutterPressed = NO;
     self.alternateXib = alternateXib;
     self.overlayView = nil;
+    self.didAppear = NO;
     return self;
 }
 
@@ -672,6 +679,7 @@ parentViewController:(UIViewController*)parentViewController
     [self.view.layer insertSublayer:previewLayer below:[[self.view.layer sublayers] objectAtIndex:0]];
     
     [self.view addSubview:[self buildOverlayView]];
+    [self performSelector:@selector(checkAppeared) withObject:nil afterDelay:2];
 }
 
 //--------------------------------------------------------------------------
@@ -687,9 +695,17 @@ parentViewController:(UIViewController*)parentViewController
 
 //--------------------------------------------------------------------------
 - (void)viewDidAppear:(BOOL)animated {
+    self.didAppear = YES;
     [self startCapturing];
     
     [super viewDidAppear:animated];
+}
+
+//--------------------------------------------------------------------------
+- (void)checkAppeared {
+  if(self.didAppear == NO) {
+    [self.processor performSelector:@selector(barcodeScanCancelled) withObject:nil afterDelay:0];
+  }
 }
 
 //--------------------------------------------------------------------------
